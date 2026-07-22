@@ -11,14 +11,12 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --ignore-scripts
 
 # Compile the app into a standalone executable that embeds the Bun runtime,
-# so the runtime image needs neither Bun nor node_modules.
-# `cpu-features` is an optional native addon of ssh2 (a ts3-nodejs-library dep);
-# it isn't built here (`--ignore-scripts`) and ssh2 requires it inside a
-# try/catch, so mark it external to keep the bundler from resolving the missing
-# `.node` binary.
+# so the runtime image needs neither Bun nor node_modules. The `build` script
+# marks `cpu-features` (an optional ssh2 native addon that isn't built here)
+# external so the bundler doesn't resolve the missing `.node` binary.
 COPY tsconfig.json ./
 COPY src ./src
-RUN bun build --compile --minify --sourcemap --external cpu-features src/index.ts --outfile bbox-ts-live
+RUN bun run build
 
 # ---- Runtime stage: minimal glibc base with just the binary ----
 FROM debian:bookworm-slim AS runtime
