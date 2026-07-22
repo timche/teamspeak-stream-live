@@ -94,6 +94,15 @@ async function main(): Promise<void> {
       await reconcileSafely(watcher);
     }
 
+    // Each poll allocates a burst of short-lived objects — client lists, member
+    // Sets, HTTP request/response bodies — that are all dead once the cycle
+    // ends. The process then idles until the next tick, so JSC sees no
+    // allocation pressure to trigger a collection and the heap creeps upward
+    // over a long-running process. Force a synchronous full GC before sleeping:
+    // the pause is irrelevant for a background reconciler and keeps steady-state
+    // memory a few times lower.
+    Bun.gc(true);
+
     await delay(config.pollIntervalMs, abort.signal);
   }
 
