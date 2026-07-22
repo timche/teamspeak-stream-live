@@ -1,6 +1,6 @@
 import { BroadcastBoxClient } from "./broadcast-box.ts";
 import { loadConfig } from "./config.ts";
-import { createLogger } from "./logger.ts";
+import { logger } from "./logger.ts";
 import { TeamSpeakManager } from "./teamspeak.ts";
 import { Watcher } from "./watcher.ts";
 
@@ -20,7 +20,6 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const logger = createLogger(config.logLevel);
 
   logger.info("Starting bbox-ts-live");
   logger.debug(
@@ -29,10 +28,10 @@ async function main(): Promise<void> {
       `stream prefix: "${config.streamGroupPrefix}"`,
   );
 
-  const broadcastBox = new BroadcastBoxClient(config, logger);
-  const teamspeak = await TeamSpeakManager.connect(config, logger);
+  const broadcastBox = new BroadcastBoxClient(config);
+  const teamspeak = await TeamSpeakManager.connect(config);
   const liveGroupSgid = await teamspeak.ensureLiveGroup(config.liveGroupName);
-  const watcher = new Watcher(config, logger, broadcastBox, teamspeak, liveGroupSgid);
+  const watcher = new Watcher(config, broadcastBox, teamspeak, liveGroupSgid);
 
   const abort = new AbortController();
   let shuttingDown = false;

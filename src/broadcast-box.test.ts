@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import { BroadcastBoxClient } from "./broadcast-box.ts";
 import { loadConfig } from "./config.ts";
-import { createLogger } from "./logger.ts";
+import { logger } from "./logger.ts";
+
+logger.level = 0; // keep test output quiet
 
 function configForUrl(apiUrl: string) {
   return loadConfig({
@@ -29,7 +31,7 @@ test("fetchLiveStreamKeys sends a base64 bearer and filters to live publishers",
     },
   });
 
-  const client = new BroadcastBoxClient(configForUrl(server.url.origin), createLogger("error"));
+  const client = new BroadcastBoxClient(configForUrl(server.url.origin));
   const live = await client.fetchLiveStreamKeys();
   server.stop(true);
 
@@ -39,7 +41,7 @@ test("fetchLiveStreamKeys sends a base64 bearer and filters to live publishers",
 
 test("throws on a non-2xx response", async () => {
   const server = Bun.serve({ port: 0, fetch: () => new Response("nope", { status: 401 }) });
-  const client = new BroadcastBoxClient(configForUrl(server.url.origin), createLogger("error"));
+  const client = new BroadcastBoxClient(configForUrl(server.url.origin));
 
   await expect(client.fetchLiveStreamKeys()).rejects.toThrow("401");
   server.stop(true);

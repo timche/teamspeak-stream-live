@@ -1,5 +1,3 @@
-import { parseLogLevel, type LogLevel } from "./logger.ts";
-
 export interface Config {
   broadcastBox: {
     apiUrl: string;
@@ -21,7 +19,6 @@ export interface Config {
   liveGroupName: string;
   /** Prefix for the per-user stream-link groups, e.g. `🔴 stream.example.com/alice`. */
   streamGroupPrefix: string;
-  logLevel: LogLevel;
 }
 
 class ConfigError extends Error {}
@@ -88,6 +85,5 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     pollIntervalMs: integer(env, "POLL_INTERVAL_MS", 10_000),
     liveGroupName: optional(env, "LIVE_GROUP_NAME", "🔴"),
     streamGroupPrefix: optional(env, "STREAM_GROUP_PREFIX", "🔴"),
-    logLevel: parseLogLevel(env["LOG_LEVEL"]),
   };
 }

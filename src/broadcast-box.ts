@@ -1,7 +1,7 @@
 import ky, { type KyInstance } from "ky";
 import { z } from "zod";
 import type { Config } from "./config.ts";
-import type { Logger } from "./logger.ts";
+import { logger } from "./logger.ts";
 
 /**
  * Lenient schema for a Broadcast Box `StreamSessionState` (the admin status
@@ -52,11 +52,9 @@ function isLive(state: StreamSession): state is StreamSession & { streamKey: str
 }
 
 export class BroadcastBoxClient {
-  readonly #logger: Logger;
   readonly #api: KyInstance;
 
-  constructor(config: Config, logger: Logger) {
-    this.#logger = logger;
+  constructor(config: Config) {
     this.#api = ky.create({
       prefix: config.broadcastBox.apiUrl,
       headers: {
@@ -88,7 +86,7 @@ export class BroadcastBoxClient {
       }
     }
 
-    this.#logger.debug(`Broadcast Box reports ${live.size} live stream(s)`);
+    logger.debug(`Broadcast Box reports ${live.size} live stream(s)`);
 
     return live;
   }

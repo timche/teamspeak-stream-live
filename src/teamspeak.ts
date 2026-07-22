@@ -1,6 +1,6 @@
 import { QueryProtocol, TeamSpeak } from "ts3-nodejs-library";
 import type { Config } from "./config.ts";
-import type { Logger } from "./logger.ts";
+import { logger } from "./logger.ts";
 
 /** A regular (non-template) server group. */
 const SERVER_GROUP_TYPE_REGULAR = 1;
@@ -35,15 +35,13 @@ function isEmptyResultError(error: unknown): boolean {
  * operations the watcher needs, plus transparent reconnection.
  */
 export class TeamSpeakManager {
-  readonly #logger: Logger;
   #query: TeamSpeak;
 
-  private constructor(logger: Logger, query: TeamSpeak) {
-    this.#logger = logger;
+  private constructor(query: TeamSpeak) {
     this.#query = query;
   }
 
-  static async connect(config: Config, logger: Logger): Promise<TeamSpeakManager> {
+  static async connect(config: Config): Promise<TeamSpeakManager> {
     const query = await TeamSpeak.connect({
       host: config.teamspeak.host,
       protocol: QueryProtocol.RAW,
@@ -54,7 +52,7 @@ export class TeamSpeakManager {
       nickname: config.teamspeak.nickname,
     });
 
-    const manager = new TeamSpeakManager(logger, query);
+    const manager = new TeamSpeakManager(query);
     manager.#attachHandlers();
     logger.info(
       `Connected to TeamSpeak ServerQuery at ${config.teamspeak.host}:${config.teamspeak.queryPort}`,
@@ -65,17 +63,15 @@ export class TeamSpeakManager {
 
   #attachHandlers(): void {
     this.#query.on("error", (error) => {
-      this.#logger.error("TeamSpeak connection error:", error.message);
+      logger.error("TeamSpeak connection error:", error.message);
     });
     this.#query.on("close", (error) => {
-      this.#logger.warn(
-        `TeamSpeak connection closed${error ? `: ${error.message}` : ""}. Reconnecting…`,
-      );
+      logger.warn(`TeamSpeak connection closed${error ? `: ${error.message}` : ""}. Reconnecting…`);
       // Reconnect forever; the library restores the selected virtual server
       // and re-registers context on success.
       this.#query.reconnect(-1, 2000).then(
-        () => this.#logger.info("Reconnected to TeamSpeak ServerQuery"),
-        (reason: unknown) => this.#logger.error("TeamSpeak reconnect failed:", reason),
+        () => logger.info("Reconnected to TeamSpeak ServerQuery"),
+        (reason: unknown) => logger.error("TeamSpeak reconnect failed:", reason),
       );
     });
   }
@@ -90,7 +86,7 @@ export class TeamSpeakManager {
 
     if (group === undefined) {
       group = await this.#query.serverGroupCreate(name, SERVER_GROUP_TYPE_REGULAR);
-      this.#logger.info(`Created shared live group "${name}" (sgid=${group.sgid})`);
+      logger.info(`Created shared live group "${name}" (sgid=${group.sgid})`);
     }
 
     await this.#query.serverGroupAddPerm(group.sgid, {
@@ -147,7 +143,7 @@ export class TeamSpeakManager {
   async createGroupAndAssign(name: string, databaseId: string): Promise<string> {
     const group = await this.#query.serverGroupCreate(name, SERVER_GROUP_TYPE_REGULAR);
     await this.#query.serverGroupAddClient(databaseId, group.sgid);
-    this.#logger.info(`Created group "${name}" and assigned client dbid=${databaseId}`);
+    logger.info(`Created group "${name}" and assigned client dbid=${databaseId}`);
 
     return group.sgid;
   }
@@ -155,7 +151,7 @@ export class TeamSpeakManager {
   /** Deletes a server group (force-removing any members). */
   async deleteGroup(group: ServerGroupRef): Promise<void> {
     await this.#query.serverGroupDel(group.sgid, true);
-    this.#logger.info(`Deleted group "${group.name}"`);
+    logger.info(`Deleted group "${group.name}"`);
   }
 
   async disconnect(): Promise<void> {
