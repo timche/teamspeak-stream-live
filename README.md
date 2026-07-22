@@ -31,7 +31,7 @@ Everything is configured via environment variables (see [`.env.example`](./.env.
 | --------------------------- | :------: | -------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `BROADCAST_BOX_API_URL`     |    ✅    | –              | Internal Broadcast Box API base URL, e.g. `http://broadcast-box:8080`                                                            |
 | `BROADCAST_BOX_ADMIN_TOKEN` |    ✅    | –              | Admin token in **cleartext**. Base64-encoded automatically before being sent. Must match Broadcast Box's `FRONTEND_ADMIN_TOKEN`. |
-| `PUBLIC_STREAM_HOST`        |    ✅    | –              | Public host shown in the group name, e.g. `stream.example.com` (scheme/trailing slash stripped)                                   |
+| `PUBLIC_STREAM_HOST`        |    ✅    | –              | Public host shown in the group name, e.g. `stream.example.com` (scheme/trailing slash stripped)                                  |
 | `TEAMSPEAK_HOST`            |    ✅    | –              | TeamSpeak ServerQuery host                                                                                                       |
 | `TEAMSPEAK_QUERY_PORT`      |          | `10011`        | ServerQuery (RAW) port                                                                                                           |
 | `TEAMSPEAK_SERVER_PORT`     |          | `9987`         | Voice port of the virtual server to select                                                                                       |
@@ -85,7 +85,7 @@ docker compose up -d
 
 ### Publishing to Docker Hub
 
-`.github/workflows/docker-publish.yml` builds and pushes a multi-arch image (`linux/amd64`, `linux/arm64`) to Docker Hub on pushes to `main` and on `v*` tags. Configure these repository settings:
+`.github/workflows/docker-publish.yml` builds and pushes a multi-arch image (`linux/amd64`, `linux/arm64`) to Docker Hub on `v*` tags (`git tag v0.1.0 && git push --tags`), with `:latest` tracking the newest tag. It can also be run manually via `workflow_dispatch`. Configure these repository settings:
 
 - **Variable** `DOCKERHUB_USERNAME` — your Docker Hub username (used for the image name).
 - **Secret** `DOCKERHUB_USERNAME` — same username, for login.
