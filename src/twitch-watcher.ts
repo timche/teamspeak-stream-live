@@ -1,6 +1,12 @@
 import { logger } from "./logger.ts";
-import type { TeamSpeakManager } from "./teamspeak.ts";
+import type { TeamSpeakClientInfo, TeamSpeakManager } from "./teamspeak.ts";
 import type { TwitchClient } from "./twitch.ts";
+
+/** A live twitch channel resolved to a connected TeamSpeak client. */
+interface LiveTwitchUser {
+  username: string;
+  client: TeamSpeakClientInfo;
+}
 
 /**
  * Reconciles a shared "live" group against the Twitch channels currently live.
@@ -8,15 +14,16 @@ import type { TwitchClient } from "./twitch.ts";
  * The direction is the reverse of the Broadcast Box watcher: the users to check
  * are discovered from pre-assigned `twitch.tv/<username>` server groups (created
  * by admins, never by this service). Each poll every such username is checked on
- * Twitch, and the members of the live ones get the shared live group (`🟣`),
- * shown before their nickname in the tree.
+ * Twitch, and the *connected* members of the live ones get the shared live group
+ * (`🟣`), shown before their nickname in the tree.
  *
- * Membership is keyed by database id, so it applies to offline members too (the
- * prefix simply renders once they connect). The go-live announcement, however,
- * only fires for currently-connected members.
+ * Only connected members are tagged: a server-group name renders in the tree
+ * for online clients only, so a streamer who is live on Twitch but not in
+ * TeamSpeak is left alone until they connect (like the Broadcast Box watcher,
+ * which only ever acts on connected clients).
  *
- * Like the Broadcast Box watcher, this keeps no in-memory state — each poll
- * diffs the desired state against what actually exists on the server.
+ * The watcher keeps no in-memory state — each poll diffs the desired state
+ * against what actually exists on the server, so it self-heals across restarts.
  */
 export class TwitchWatcher {
   readonly #twitch: TwitchClient;
@@ -55,15 +62,34 @@ export class TwitchWatcher {
     const usernames = [...new Set(groups.map((group) => group.username))];
     const liveUsernames = await this.#twitch.fetchLiveUsernames(usernames, signal);
 
-    // Desired live-group members mapped to the twitch username they're live as
-    // (used to build the announcement link).
-    const desired = new Map<string, string>();
+    // Nothing is live: clear the shared group and skip the (larger) client list.
+    if (liveUsernames.size === 0) {
+      await this.#removeMembers(currentMembers);
+
+      return;
+    }
+
+    // Tag only connected members — an offline member cannot show the prefix.
+    const clients = await this.#teamspeak.listClients();
+    const clientByDbid = new Map(clients.map((client) => [client.databaseId, client]));
+
+    const desired = new Map<string, LiveTwitchUser>();
     for (const group of groups) {
       if (!liveUsernames.has(group.username)) {
         continue;
       }
+
       for (const databaseId of group.members) {
-        desired.set(databaseId, group.username);
+        const client = clientByDbid.get(databaseId);
+
+        if (client === undefined) {
+          logger.debug(
+            `Twitch channel "${group.username}" is live but member dbid=${databaseId} is not connected`,
+          );
+          continue;
+        }
+
+        desired.set(databaseId, { username: group.username, client });
       }
     }
 
@@ -76,9 +102,13 @@ export class TwitchWatcher {
     await this.#removeMembers(members);
   }
 
-  async #reconcileMembership(current: Set<string>, desired: Map<string, string>): Promise<void> {
-    const newlyLive = new Map<string, string>();
-    for (const [databaseId, username] of desired) {
+  async #reconcileMembership(
+    current: Set<string>,
+    desired: Map<string, LiveTwitchUser>,
+  ): Promise<void> {
+    // Newly-live users are handled one after another so the query client's
+    // channel hop and the channel message stay in step per user.
+    for (const [databaseId, user] of desired) {
       if (current.has(databaseId)) {
         continue;
       }
@@ -86,13 +116,13 @@ export class TwitchWatcher {
       try {
         await this.#teamspeak.addClientToGroup(databaseId, this.#liveGroupSgid);
         logger.info(`Added dbid=${databaseId} to the Twitch live group`);
-        newlyLive.set(databaseId, username);
       } catch (error) {
         logger.error(`Failed to add dbid=${databaseId} to the Twitch live group:`, message(error));
+        continue;
       }
-    }
 
-    await this.#announce(newlyLive);
+      await this.#announce(user);
+    }
 
     for (const databaseId of current) {
       if (desired.has(databaseId)) {
@@ -117,37 +147,29 @@ export class TwitchWatcher {
   }
 
   /**
-   * Best-effort go-live announcement for the newly-live members that are
-   * currently connected. Offline members get no message — their live prefix
-   * renders when they connect. Fires once per go-live because it is derived from
-   * the shared-group membership transition.
+   * Best-effort go-live announcement in the channel the user is currently in.
+   * Fires once per go-live because it is derived from the shared-group
+   * membership transition.
    */
-  async #announce(newlyLive: Map<string, string>): Promise<void> {
-    if (this.#liveMessageTemplate === "" || newlyLive.size === 0) {
+  async #announce(user: LiveTwitchUser): Promise<void> {
+    if (this.#liveMessageTemplate === "") {
       return;
     }
 
-    const clients = await this.#teamspeak.listClients();
-    const clientByDbid = new Map(clients.map((client) => [client.databaseId, client]));
+    const text = this.#liveMessageTemplate
+      .replaceAll("{nickname}", user.client.nickname)
+      .replaceAll("{link}", this.#streamLink(user.username));
 
-    // Announce one after another: a TeamSpeak channel message goes to the query
-    // client's current channel, so it hops into each user's channel in turn.
-    for (const [databaseId, username] of newlyLive) {
-      const client = clientByDbid.get(databaseId);
-      if (client === undefined) {
-        continue;
-      }
-
-      const text = this.#liveMessageTemplate
-        .replaceAll("{nickname}", client.nickname)
-        .replaceAll("{link}", this.#streamLink(username));
-
-      try {
-        await this.#teamspeak.sendChannelMessage(client.channelId, text);
-        logger.info(`Announced "${client.nickname}" live on Twitch in channel ${client.channelId}`);
-      } catch (error) {
-        logger.error(`Failed to announce "${client.nickname}" as live on Twitch:`, message(error));
-      }
+    try {
+      await this.#teamspeak.sendChannelMessage(user.client.channelId, text);
+      logger.info(
+        `Announced "${user.client.nickname}" live on Twitch in channel ${user.client.channelId}`,
+      );
+    } catch (error) {
+      logger.error(
+        `Failed to announce "${user.client.nickname}" as live on Twitch:`,
+        message(error),
+      );
     }
   }
 

@@ -119,7 +119,7 @@ test("stop: removes members whose channel is no longer live", async () => {
   expect(removed).toEqual([{ databaseId: "42", sgid: LIVE_SGID }]);
 });
 
-test("offline member is still tagged but not announced", async () => {
+test("offline member is not tagged", async () => {
   const { ts, added, messages } = makeTeamspeak(
     [],
     [{ username: "azn", members: ["99"] }],
@@ -129,8 +129,22 @@ test("offline member is still tagged but not announced", async () => {
 
   await run(twitch, ts);
 
-  expect(added).toEqual([{ databaseId: "99", sgid: LIVE_SGID }]);
+  expect(added).toEqual([]);
   expect(messages).toEqual([]);
+});
+
+test("live group tags connected members but skips offline ones", async () => {
+  const { ts, added, messages } = makeTeamspeak(
+    [],
+    [{ username: "azn", members: ["42", "99"] }],
+    [{ nickname: "Azn", databaseId: "42", channelId: "5" }], // 99 is offline
+  );
+  const { twitch } = makeTwitch(["azn"]);
+
+  await run(twitch, ts);
+
+  expect(added).toEqual([{ databaseId: "42", sgid: LIVE_SGID }]);
+  expect(messages).toEqual([{ channelId: "5", text: "Azn is now live: https://twitch.tv/azn" }]);
 });
 
 test("dedupes duplicate usernames into a single Twitch query", async () => {
@@ -140,7 +154,10 @@ test("dedupes duplicate usernames into a single Twitch query", async () => {
       { username: "azn", members: ["1"] },
       { username: "azn", members: ["2"] },
     ],
-    [],
+    [
+      { nickname: "one", databaseId: "1" },
+      { nickname: "two", databaseId: "2" },
+    ],
   );
   const { twitch, calls } = makeTwitch(["azn"]);
 
@@ -157,7 +174,7 @@ test("only live groups' members are tagged; offline groups' members removed", as
       { username: "azn", members: ["42"] },
       { username: "bob", members: ["7"] },
     ],
-    [],
+    [{ nickname: "azn", databaseId: "42" }],
   );
   const { twitch } = makeTwitch(["azn"]); // only azn is live
 
@@ -178,11 +195,17 @@ test("no twitch.tv/ groups: clears the live group and never calls Twitch", async
 });
 
 test("membership operations only ever touch the Twitch live group sgid", async () => {
-  const { ts, added, removed } = makeTeamspeak(["7"], [{ username: "azn", members: ["42"] }], []);
+  const { ts, added, removed } = makeTeamspeak(
+    ["7"],
+    [{ username: "azn", members: ["42"] }],
+    [{ nickname: "azn", databaseId: "42" }],
+  );
   const { twitch } = makeTwitch(["azn"]);
 
   await run(twitch, ts);
 
+  expect(added.length).toBeGreaterThan(0);
+  expect(removed.length).toBeGreaterThan(0);
   for (const entry of [...added, ...removed]) {
     expect(entry.sgid).toBe(LIVE_SGID);
     expect(entry.sgid).not.toBe(OTHER_SGID);

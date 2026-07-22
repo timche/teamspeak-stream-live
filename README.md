@@ -22,7 +22,9 @@ Enabled when `BROADCAST_BOX_API_URL`, `BROADCAST_BOX_ADMIN_TOKEN`, and `PUBLIC_S
 The **reverse** of the Broadcast Box flow. Instead of matching live stream keys to nicknames, the source of truth for _who to check_ lives in TeamSpeak: users are given **pre-assigned server groups** named `twitch.tv/<username>` (e.g. `twitch.tv/azn`), created and assigned by admins. Each poll, for every such group the service asks Twitch whether `<username>` is live and, if so, gives that group's members:
 
 1. Membership in a shared Twitch **live group** (`TWITCH_LIVE_GROUP_NAME`, default `🟣`), auto-created with the same _"show name in tree: before"_ treatment — so they show up as e.g. `🟣 azn` in the tree.
-2. A one-off **channel message** — e.g. `azn is now live: https://twitch.tv/azn` (`TWITCH_LIVE_MESSAGE_TEMPLATE`; set blank to disable). Offline members of a live group still get the `🟣` prefix (it renders when they connect) but no message.
+2. A one-off **channel message** — e.g. `azn is now live: https://twitch.tv/azn` (`TWITCH_LIVE_MESSAGE_TEMPLATE`; set blank to disable).
+
+Only members who are **currently connected** to TeamSpeak are tagged — a server-group name shows in the tree for online clients only, so a channel that is live on Twitch but whose owner isn't in TeamSpeak is left untouched until they connect.
 
 The `twitch.tv/<username>` group already exists and already advertises the link, so — unlike Broadcast Box — **no per-user group is created**; only the shared `🟣` membership is reconciled. Those identity groups are admin-owned and never created or deleted by the service.
 
@@ -51,7 +53,8 @@ Broadcast Box is expected to run with `DISABLE_STATUS=true`, so the public `/api
 
 1. List the server groups whose name starts with `TWITCH_GROUP_PREFIX` (default `twitch.tv/`) and, for each, read its members and the twitch username (the part after the prefix, lowercased).
 2. If **no such groups exist**, remove all members from the `🟣` group and stop — Twitch is never called (not even for a token).
-3. Otherwise ask the Twitch Helix API which of those usernames are live (batched, ≤100 logins per request), then diff the union of the live groups' members against the `🟣` group's current members: add the newly-live, remove those no longer live. Still-live members are left untouched. Each _newly_-added member who is currently connected also gets the go-live channel message (offline members are tagged but not messaged); the transition is derived from `🟣` membership, so it stays stateless — one message per go-live.
+3. If **nothing is live**, remove all members from the `🟣` group and stop — the client list is not fetched.
+4. Otherwise fetch connected clients and diff the `🟣` group's current members against the **connected** members of the live groups: add the newly-live, remove those no longer live (or no longer connected). Still-live members are left untouched. Each _newly_-added member also gets the go-live channel message; the transition is derived from `🟣` membership, so it stays stateless — one message per go-live.
 
 ## Configuration
 
