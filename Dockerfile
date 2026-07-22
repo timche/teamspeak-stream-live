@@ -28,6 +28,12 @@ WORKDIR /app
 # case that BROADCAST_BOX_API_URL points at a public-CA HTTPS endpoint.
 COPY --from=build /app/teamspeak-stream-live /usr/local/bin/teamspeak-stream-live
 
+# Run JavaScriptCore in low-memory mode: a smaller, slower-growing heap and more
+# frequent GC. The reconciler is I/O-bound and idle between polls, so the CPU
+# trade-off is irrelevant; it just keeps steady-state RSS down. Standalone Bun
+# executables read runtime flags from BUN_OPTIONS, so no recompile is needed.
+ENV BUN_OPTIONS="--smol"
+
 # Run as the non-root user provided by the base image.
 USER nobody
 

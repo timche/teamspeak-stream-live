@@ -38,6 +38,9 @@ services:
     # Or build locally:
     # build: .
     restart: unless-stopped
+    # The watcher's footprint is small; cap it so a single service can't balloon.
+    # This also nudges JavaScriptCore to size its heap conservatively.
+    mem_limit: 128m
     depends_on:
       - teamspeak
       - broadcast-box
