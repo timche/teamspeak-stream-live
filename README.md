@@ -61,7 +61,7 @@ bun test               # unit tests
 bun run build          # compile a standalone ./watcher binary
 ```
 
-Linting and formatting use [`@timche/oxc-configs`](https://www.npmjs.com/package/@timche/oxc-configs) (oxlint + oxfmt).
+Tooling: [`consola`](https://github.com/unjs/consola) for logging, and [`@timche/oxc-configs`](https://www.npmjs.com/package/@timche/oxc-configs) (oxlint + oxfmt) for linting/formatting.
 
 ## Docker
 

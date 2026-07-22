@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "consola": "^3.4.2",
     "ts3-nodejs-library": "^3.5.3"
   },
   "devDependencies": {
