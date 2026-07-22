@@ -1,27 +1,26 @@
 # bbox-ts-live
 
-Watches a [Broadcast Box](https://github.com/Glimesh/broadcast-box) instance and, whenever a TeamSpeak user is **live**, assigns that user a temporary TeamSpeak server group named after their stream link — prefixed with 🔴. When the stream stops, the group is removed again.
+Watches a [Broadcast Box](https://github.com/Glimesh/broadcast-box) instance and, whenever a TeamSpeak user is **live**, gives that user two things:
 
-For example, while the TeamSpeak user `azn` is streaming, they are given the group:
+1. Membership in a shared **live group** (`LIVE_GROUP_NAME`, default `🔴`) that the service auto-creates with _"show name in tree: before"_ — so the user shows up as e.g. `🔴 alice` in the channel tree.
+2. Their own **stream-link group** named `🔴 <host>/<username>` (e.g. `🔴 stream.example.com/alice`), so other users can see the stream link in that user's server-group list.
 
-```
-🔴 stream.example.com/azn
-```
+When the stream stops, both are removed again.
 
 ## How it works
 
-Broadcast Box is expected to run with `DISABLE_STATUS=true`, so the public `/api/status` route is off. Instead the watcher polls **`GET /api/admin/status`** using the admin bearer token. The stream key is assumed to equal the TeamSpeak nickname (`stream.example.com/<teamspeak-username>`).
+Broadcast Box is expected to run with `DISABLE_STATUS=true`, so the public `/api/status` route is off. Instead the watcher polls **`GET /api/admin/status`** using the admin bearer token. The stream key is assumed to equal the TeamSpeak nickname.
+
+At startup the service ensures the shared live group exists and has _"show name in tree: before"_ enabled (TeamSpeak permission `i_group_show_name_in_tree = 1`).
 
 Each poll (`POLL_INTERVAL_MS`, default 10s) is a **stateless reconciliation** — the watcher keeps no in-memory state, so restarts and crashes recover automatically:
 
 1. Fetch the set of live stream keys from `/api/admin/status`.
-2. List existing temporary groups on TeamSpeak (those whose name starts with `GROUP_PREFIX`).
-3. If **nothing is live**, delete any leftover temporary groups and stop — the (larger) client list is never fetched.
-4. Otherwise fetch connected clients and, for every live stream that matches a connected nickname (case-insensitive):
-   - **Delete** temporary groups that are no longer live (ended streams, stale/crash leftovers).
-   - **Create** a group for each newly live streamer and assign the client. Groups for still-live streamers are left untouched (no flicker).
+2. Read the shared group's current members and the existing per-user stream-link groups (names starting with `STREAM_GROUP_PREFIX`).
+3. If **nothing is live**, remove all members from the live group and delete the stream-link groups, then stop — the (larger) client list is never fetched.
+4. Otherwise fetch connected clients and, for every live stream that matches a connected nickname (case-insensitive), diff against the current state: add/remove live-group members and create/delete per-user stream-link groups. Still-live streamers are left untouched (no flicker).
 
-On `SIGINT`/`SIGTERM` the watcher removes all temporary groups and disconnects.
+On `SIGINT`/`SIGTERM` the watcher empties the live group, deletes the stream-link groups, and disconnects. The shared live group itself is left in place.
 
 ## Configuration
 
@@ -31,7 +30,7 @@ Everything is configured via environment variables (see [`.env.example`](./.env.
 | --------------------------- | :------: | -------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `BROADCAST_BOX_API_URL`     |    ✅    | –              | Internal Broadcast Box API base URL, e.g. `http://broadcast-box:8080`                                                            |
 | `BROADCAST_BOX_ADMIN_TOKEN` |    ✅    | –              | Admin token in **cleartext**. Base64-encoded automatically before being sent. Must match Broadcast Box's `FRONTEND_ADMIN_TOKEN`. |
-| `PUBLIC_STREAM_HOST`        |    ✅    | –              | Public host shown in the group name, e.g. `stream.example.com` (scheme/trailing slash stripped)                                  |
+| `PUBLIC_STREAM_HOST`        |    ✅    | –              | Public host used in the stream-link group name, e.g. `stream.example.com` (scheme/trailing slash stripped)                       |
 | `TEAMSPEAK_HOST`            |    ✅    | –              | TeamSpeak ServerQuery host                                                                                                       |
 | `TEAMSPEAK_QUERY_PORT`      |          | `10011`        | ServerQuery (RAW) port                                                                                                           |
 | `TEAMSPEAK_SERVER_PORT`     |          | `9987`         | Voice port of the virtual server to select                                                                                       |
@@ -39,7 +38,8 @@ Everything is configured via environment variables (see [`.env.example`](./.env.
 | `TEAMSPEAK_QUERY_PASSWORD`  |    ✅    | –              | ServerQuery password                                                                                                             |
 | `TEAMSPEAK_QUERY_NICKNAME`  |          | `bbox-ts-live` | Nickname the query client connects with                                                                                          |
 | `POLL_INTERVAL_MS`          |          | `10000`        | Reconcile interval in milliseconds                                                                                               |
-| `GROUP_PREFIX`              |          | `🔴`           | Prefix for the temporary group name                                                                                              |
+| `LIVE_GROUP_NAME`           |          | `🔴`           | Name of the shared live group (auto-created, shown before the nickname in the tree)                                              |
+| `STREAM_GROUP_PREFIX`       |          | `🔴`           | Prefix for the per-user stream-link groups                                                                                       |
 | `LOG_LEVEL`                 |          | `info`         | `debug` \| `info` \| `warn` \| `error`                                                                                           |
 
 The `BROADCAST_BOX_ADMIN_TOKEN` value is the token in cleartext; the watcher sends it as `Authorization: Bearer <base64(token)>`.
@@ -96,8 +96,8 @@ docker compose up -d
 1. Start the stack: `docker compose -f docker-compose.example.yml up`.
 2. Connect to the TeamSpeak server with a nickname (e.g. `azn`).
 3. Start streaming to Broadcast Box with the **same** stream key (`azn`).
-4. Within one poll interval the user gets the `🔴 <host>/azn` group.
-5. Stop the stream — the group is removed on the next poll.
+4. Within one poll interval the tree shows `🔴 azn`, and inspecting the user reveals the `🔴 <host>/azn` group.
+5. Stop the stream — both are removed on the next poll.
 
 ## License
 

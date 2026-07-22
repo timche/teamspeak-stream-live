@@ -25,12 +25,14 @@ async function main(): Promise<void> {
   logger.info("Starting bbox-ts-live");
   logger.debug(
     `Broadcast Box: ${config.broadcastBox.apiUrl} · public host: ${config.publicStreamHost} · ` +
-      `poll: ${config.pollIntervalMs}ms · prefix: "${config.groupPrefix}"`,
+      `poll: ${config.pollIntervalMs}ms · live group: "${config.liveGroupName}" · ` +
+      `stream prefix: "${config.streamGroupPrefix}"`,
   );
 
   const broadcastBox = new BroadcastBoxClient(config, logger);
   const teamspeak = await TeamSpeakManager.connect(config, logger);
-  const watcher = new Watcher(config, logger, broadcastBox, teamspeak);
+  const liveGroupSgid = await teamspeak.ensureLiveGroup(config.liveGroupName);
+  const watcher = new Watcher(config, logger, broadcastBox, teamspeak, liveGroupSgid);
 
   const abort = new AbortController();
   let shuttingDown = false;
@@ -62,12 +64,9 @@ async function main(): Promise<void> {
     await delay(config.pollIntervalMs, abort.signal);
   }
 
-  // Best-effort cleanup: remove any temporary groups we may have created.
+  // Best-effort cleanup: clear the live group and delete per-user stream groups.
   try {
-    const leftovers = await teamspeak.listTemporaryGroups();
-    for (const group of leftovers) {
-      await teamspeak.deleteGroup(group);
-    }
+    await watcher.cleanup();
   } catch (error) {
     logger.error(
       "Cleanup during shutdown failed:",

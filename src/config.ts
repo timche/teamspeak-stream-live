@@ -6,7 +6,7 @@ export interface Config {
     /** Base64-encoded bearer token derived from the cleartext env value. */
     authorization: string;
   };
-  /** Public host shown in the temporary group name, e.g. `stream.example.com`. */
+  /** Public host used in the per-user stream-link group name, e.g. `stream.example.com`. */
   publicStreamHost: string;
   teamspeak: {
     host: string;
@@ -17,7 +17,10 @@ export interface Config {
     nickname: string;
   };
   pollIntervalMs: number;
-  groupPrefix: string;
+  /** Name of the shared "live" group (shown before the nickname in the tree). */
+  liveGroupName: string;
+  /** Prefix for the per-user stream-link groups, e.g. `🔴 stream.example.com/alice`. */
+  streamGroupPrefix: string;
   logLevel: LogLevel;
 }
 
@@ -83,7 +86,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       nickname: optional(env, "TEAMSPEAK_QUERY_NICKNAME", "bbox-ts-live"),
     },
     pollIntervalMs: integer(env, "POLL_INTERVAL_MS", 10_000),
-    groupPrefix: optional(env, "GROUP_PREFIX", "🔴"),
+    liveGroupName: optional(env, "LIVE_GROUP_NAME", "🔴"),
+    streamGroupPrefix: optional(env, "STREAM_GROUP_PREFIX", "🔴"),
     logLevel: parseLogLevel(env["LOG_LEVEL"]),
   };
 }

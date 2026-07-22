@@ -1,84 +1,152 @@
 import type { BroadcastBoxClient } from "./broadcast-box.ts";
 import type { Config } from "./config.ts";
 import type { Logger } from "./logger.ts";
-import type { TeamSpeakManager, TemporaryGroup } from "./teamspeak.ts";
+import type { ServerGroupRef, TeamSpeakManager } from "./teamspeak.ts";
 
 /**
- * Reconciles TeamSpeak temporary groups against the set of users currently
- * live on Broadcast Box. The watcher keeps no in-memory state: every poll the
- * desired state is diffed against the groups that actually exist on the
- * TeamSpeak server, so cleanup happens on every cycle and restarts/crashes
- * recover automatically.
+ * Reconciles TeamSpeak groups against the users currently live on Broadcast Box.
+ *
+ * Every live user gets two things:
+ *   1. membership in the shared "live" group (shown before the nickname);
+ *   2. an individual group named after their stream link (visible in their
+ *      server-group list).
+ *
+ * The watcher keeps no in-memory state — each poll diffs the desired state
+ * against what actually exists on the server, so it self-heals across restarts.
  */
 export class Watcher {
   readonly #config: Config;
   readonly #logger: Logger;
   readonly #broadcastBox: BroadcastBoxClient;
   readonly #teamspeak: TeamSpeakManager;
+  readonly #liveGroupSgid: string;
 
   constructor(
     config: Config,
     logger: Logger,
     broadcastBox: BroadcastBoxClient,
     teamspeak: TeamSpeakManager,
+    liveGroupSgid: string,
   ) {
     this.#config = config;
     this.#logger = logger;
     this.#broadcastBox = broadcastBox;
     this.#teamspeak = teamspeak;
+    this.#liveGroupSgid = liveGroupSgid;
   }
 
-  /** Group name for a stream, e.g. `🔴 stream.example.com/azn`. */
-  #groupName(streamKey: string): string {
-    return `${this.#config.groupPrefix} ${this.#config.publicStreamHost}/${streamKey}`;
+  /** Per-user stream-link group name, e.g. `🔴 stream.example.com/alice`. */
+  #streamGroupName(streamKey: string): string {
+    return `${this.#config.streamGroupPrefix} ${this.#config.publicStreamHost}/${streamKey}`;
+  }
+
+  /** Name prefix used to find the per-user stream-link groups. */
+  #streamGroupNamePrefix(): string {
+    return `${this.#config.streamGroupPrefix} `;
   }
 
   /** Runs a single reconciliation cycle. */
   async reconcile(signal?: AbortSignal): Promise<void> {
     const liveStreamKeys = await this.#broadcastBox.fetchLiveStreamKeys(signal);
-    const existingGroups = await this.#teamspeak.listTemporaryGroups();
+    const currentMembers = await this.#teamspeak.listGroupMemberDbids(this.#liveGroupSgid);
+    const existingStreamGroups = await this.#teamspeak.listGroupsByPrefix(
+      this.#streamGroupNamePrefix(),
+      this.#liveGroupSgid,
+    );
 
-    // Nothing is live: tear down any leftover temp groups and skip the
-    // (larger) client list entirely.
+    // Nothing is live: clear the shared group and all per-user groups, and skip
+    // the (larger) client list entirely.
     if (liveStreamKeys.size === 0) {
-      await this.#deleteGroups(existingGroups);
+      await this.#removeMembers(currentMembers);
+      await this.#deleteGroups(existingStreamGroups);
 
       return;
     }
 
     const clients = await this.#teamspeak.listClients();
-    const clientByNickname = new Map<string, string>();
+    const databaseIdByNickname = new Map<string, string>();
     for (const client of clients) {
-      clientByNickname.set(client.nickname.toLowerCase(), client.databaseId);
+      databaseIdByNickname.set(client.nickname.toLowerCase(), client.databaseId);
     }
 
-    // Desired state: one group per live stream that maps to a connected client.
-    const desiredNames = new Map<string, { streamKey: string; databaseId: string }>();
+    // Desired state for the live users that map to a connected client.
+    const desiredMembers = new Set<string>();
+    const desiredStreamGroups = new Map<string, { streamKey: string; databaseId: string }>();
     for (const streamKey of liveStreamKeys) {
-      const databaseId = clientByNickname.get(streamKey.toLowerCase());
+      const databaseId = databaseIdByNickname.get(streamKey.toLowerCase());
 
       if (databaseId === undefined) {
         this.#logger.debug(`Live stream "${streamKey}" has no matching connected TeamSpeak user`);
         continue;
       }
 
-      desiredNames.set(this.#groupName(streamKey), { streamKey, databaseId });
+      desiredMembers.add(databaseId);
+      desiredStreamGroups.set(this.#streamGroupName(streamKey), { streamKey, databaseId });
     }
 
-    // Cleanup: delete existing temp groups that are no longer desired.
+    await this.#reconcileSharedMembership(currentMembers, desiredMembers);
+    await this.#reconcileStreamGroups(existingStreamGroups, desiredStreamGroups);
+  }
+
+  /** Best-effort teardown for shutdown: empty the shared group, delete per-user groups. */
+  async cleanup(): Promise<void> {
+    const members = await this.#teamspeak.listGroupMemberDbids(this.#liveGroupSgid);
+    await this.#removeMembers(members);
+
+    const groups = await this.#teamspeak.listGroupsByPrefix(
+      this.#streamGroupNamePrefix(),
+      this.#liveGroupSgid,
+    );
+    await this.#deleteGroups(groups);
+  }
+
+  async #reconcileSharedMembership(current: Set<string>, desired: Set<string>): Promise<void> {
+    for (const databaseId of desired) {
+      if (current.has(databaseId)) {
+        continue;
+      }
+
+      try {
+        await this.#teamspeak.addClientToGroup(databaseId, this.#liveGroupSgid);
+        this.#logger.info(`Added dbid=${databaseId} to the live group`);
+      } catch (error) {
+        this.#logger.error(`Failed to add dbid=${databaseId} to the live group:`, message(error));
+      }
+    }
+
+    for (const databaseId of current) {
+      if (desired.has(databaseId)) {
+        continue;
+      }
+
+      try {
+        await this.#teamspeak.removeClientFromGroup(databaseId, this.#liveGroupSgid);
+        this.#logger.info(`Removed dbid=${databaseId} from the live group`);
+      } catch (error) {
+        this.#logger.error(
+          `Failed to remove dbid=${databaseId} from the live group:`,
+          message(error),
+        );
+      }
+    }
+  }
+
+  async #reconcileStreamGroups(
+    existing: ServerGroupRef[],
+    desired: Map<string, { streamKey: string; databaseId: string }>,
+  ): Promise<void> {
     const existingNames = new Set<string>();
-    const stale: TemporaryGroup[] = [];
-    for (const group of existingGroups) {
+    const stale: ServerGroupRef[] = [];
+    for (const group of existing) {
       existingNames.add(group.name);
 
-      if (!desiredNames.has(group.name)) {
+      if (!desired.has(group.name)) {
         stale.push(group);
       }
     }
     await this.#deleteGroups(stale);
 
-    // Create: add groups for newly live streamers, leaving existing ones intact.
-    for (const [name, { streamKey, databaseId }] of desiredNames) {
+    for (const [name, { streamKey, databaseId }] of desired) {
       if (existingNames.has(name)) {
         continue;
       }
@@ -87,24 +155,37 @@ export class Watcher {
         await this.#teamspeak.createGroupAndAssign(name, databaseId);
       } catch (error) {
         this.#logger.error(
-          `Failed to create/assign group for stream "${streamKey}":`,
-          errorMessage(error),
+          `Failed to create/assign stream group for "${streamKey}":`,
+          message(error),
         );
       }
     }
   }
 
-  async #deleteGroups(groups: TemporaryGroup[]): Promise<void> {
+  async #removeMembers(databaseIds: Set<string>): Promise<void> {
+    for (const databaseId of databaseIds) {
+      try {
+        await this.#teamspeak.removeClientFromGroup(databaseId, this.#liveGroupSgid);
+      } catch (error) {
+        this.#logger.error(
+          `Failed to remove dbid=${databaseId} from the live group:`,
+          message(error),
+        );
+      }
+    }
+  }
+
+  async #deleteGroups(groups: ServerGroupRef[]): Promise<void> {
     for (const group of groups) {
       try {
         await this.#teamspeak.deleteGroup(group);
       } catch (error) {
-        this.#logger.error(`Failed to delete group "${group.name}":`, errorMessage(error));
+        this.#logger.error(`Failed to delete group "${group.name}":`, message(error));
       }
     }
   }
 }
 
-function errorMessage(error: unknown): string {
+function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
 import { loadConfig } from "./config.ts";
 import { createLogger } from "./logger.ts";
-import type { TemporaryGroup } from "./teamspeak.ts";
+import type { ServerGroupRef } from "./teamspeak.ts";
 import { Watcher } from "./watcher.ts";
+
+const LIVE_SGID = "100";
 
 const config = loadConfig({
   BROADCAST_BOX_API_URL: "http://broadcast-box:8080",
@@ -15,104 +17,145 @@ const config = loadConfig({
 const logger = createLogger(config.logLevel);
 
 function makeTeamspeak(
-  existing: TemporaryGroup[],
+  members: string[],
+  streamGroups: ServerGroupRef[],
   clients: { nickname: string; databaseId: string }[],
 ) {
+  const memberSet = new Set(members);
+  let groups = [...streamGroups];
+  const added: string[] = [];
+  const removed: string[] = [];
   const created: string[] = [];
-  const assigned: [string, string][] = [];
   const deleted: string[] = [];
   let clientFetches = 0;
-  let groups = [...existing];
 
   const ts = {
+    listGroupMemberDbids: async () => new Set(memberSet),
+    listGroupsByPrefix: async (prefix: string, excludeSgid: string) =>
+      groups.filter((group) => group.sgid !== excludeSgid && group.name.startsWith(prefix)),
     listClients: async () => {
       clientFetches++;
       return clients;
     },
-    listTemporaryGroups: async () => groups,
-    createGroupAndAssign: async (name: string, dbid: string) => {
-      created.push(name);
-      assigned.push([name, dbid]);
-      groups.push({ sgid: `new-${name}`, name });
+    addClientToGroup: async (databaseId: string) => {
+      added.push(databaseId);
+      memberSet.add(databaseId);
     },
-    deleteGroup: async (group: TemporaryGroup) => {
+    removeClientFromGroup: async (databaseId: string) => {
+      removed.push(databaseId);
+      memberSet.delete(databaseId);
+    },
+    createGroupAndAssign: async (name: string) => {
+      created.push(name);
+      groups.push({ sgid: `new-${name}`, name });
+      return `new-${name}`;
+    },
+    deleteGroup: async (group: ServerGroupRef) => {
       deleted.push(group.name);
-      groups = groups.filter((existingGroup) => existingGroup.sgid !== group.sgid);
+      groups = groups.filter((existing) => existing.sgid !== group.sgid);
     },
     disconnect: async () => undefined,
   };
 
-  return {
-    ts,
-    created,
-    assigned,
-    deleted,
-    clientFetches: () => clientFetches,
-  };
+  return { ts, added, removed, created, deleted, clientFetches: () => clientFetches };
 }
 
-test("config base64-encodes the cleartext token and normalizes the public host", () => {
-  expect(config.broadcastBox.authorization).toBe(`Bearer ${btoa("secret")}`);
+function streamGroup(streamKey: string): string {
+  return `🔴 stream.example.com/${streamKey}`;
+}
+
+function run(
+  broadcastBox: { fetchLiveStreamKeys: () => Promise<Set<string>> },
+  ts: unknown,
+): Promise<void> {
+  return new Watcher(config, logger, broadcastBox as never, ts as never, LIVE_SGID).reconcile();
+}
+
+test("config exposes decoupled group names and a normalized public host", () => {
+  expect(config.liveGroupName).toBe("🔴");
+  expect(config.streamGroupPrefix).toBe("🔴");
   expect(config.publicStreamHost).toBe("stream.example.com");
+  expect(config.broadcastBox.authorization).toBe(`Bearer ${btoa("secret")}`);
 });
 
-test("go-live: creates and assigns a group for a matching client", async () => {
-  const broadcastBox = { fetchLiveStreamKeys: async () => new Set(["azn"]) };
-  const { ts, created, assigned, deleted } = makeTeamspeak(
+test("go-live: adds to the shared group and creates the stream-link group", async () => {
+  const broadcastBox = { fetchLiveStreamKeys: async () => new Set(["alice"]) };
+  const { ts, added, created, removed, deleted } = makeTeamspeak(
     [],
-    [{ nickname: "AzN", databaseId: "42" }],
+    [],
+    [{ nickname: "Alice", databaseId: "42" }],
   );
 
-  await new Watcher(config, logger, broadcastBox as never, ts as never).reconcile();
+  await run(broadcastBox, ts);
 
-  expect(created).toEqual(["🔴 stream.example.com/azn"]);
-  expect(assigned).toEqual([["🔴 stream.example.com/azn", "42"]]);
+  expect(added).toEqual(["42"]);
+  expect(created).toEqual([streamGroup("alice")]);
+  expect(removed).toEqual([]);
   expect(deleted).toEqual([]);
 });
 
-test("still-live: existing group is left untouched (no churn)", async () => {
-  const broadcastBox = { fetchLiveStreamKeys: async () => new Set(["azn"]) };
-  const existing = [{ sgid: "1", name: "🔴 stream.example.com/azn" }];
-  const { ts, created, deleted } = makeTeamspeak(existing, [{ nickname: "azn", databaseId: "42" }]);
+test("still-live: leaves membership and stream group untouched", async () => {
+  const broadcastBox = { fetchLiveStreamKeys: async () => new Set(["alice"]) };
+  const { ts, added, created, removed, deleted } = makeTeamspeak(
+    ["42"],
+    [{ sgid: "1", name: streamGroup("alice") }],
+    [{ nickname: "alice", databaseId: "42" }],
+  );
 
-  await new Watcher(config, logger, broadcastBox as never, ts as never).reconcile();
+  await run(broadcastBox, ts);
 
+  expect(added).toEqual([]);
   expect(created).toEqual([]);
+  expect(removed).toEqual([]);
   expect(deleted).toEqual([]);
 });
 
-test("go-offline: deletes a temp group whose stream ended", async () => {
-  const broadcastBox = { fetchLiveStreamKeys: async () => new Set(["stillup"]) };
-  const existing = [
-    { sgid: "1", name: "🔴 stream.example.com/ended" },
-    { sgid: "2", name: "🔴 stream.example.com/stillup" },
-  ];
-  const { ts, deleted, created } = makeTeamspeak(existing, [
-    { nickname: "stillup", databaseId: "7" },
-  ]);
+test("stop: removes the member and deletes their stream group", async () => {
+  const broadcastBox = { fetchLiveStreamKeys: async () => new Set(["alice"]) };
+  const { ts, removed, deleted, added, created } = makeTeamspeak(
+    ["42", "7"],
+    [
+      { sgid: "1", name: streamGroup("alice") },
+      { sgid: "2", name: streamGroup("bob") },
+    ],
+    [{ nickname: "alice", databaseId: "42" }],
+  );
 
-  await new Watcher(config, logger, broadcastBox as never, ts as never).reconcile();
+  await run(broadcastBox, ts);
 
-  expect(deleted).toEqual(["🔴 stream.example.com/ended"]);
+  expect(removed).toEqual(["7"]);
+  expect(deleted).toEqual([streamGroup("bob")]);
+  expect(added).toEqual([]);
   expect(created).toEqual([]);
 });
 
-test("no streams: cleans up all temp groups and skips the client fetch", async () => {
+test("no streams: clears the shared group + stream groups and skips the client fetch", async () => {
   const broadcastBox = { fetchLiveStreamKeys: async () => new Set<string>() };
-  const existing = [{ sgid: "1", name: "🔴 stream.example.com/old" }];
-  const { ts, deleted, clientFetches } = makeTeamspeak(existing, []);
+  const { ts, removed, deleted, clientFetches } = makeTeamspeak(
+    ["42"],
+    [{ sgid: "1", name: streamGroup("alice") }],
+    [],
+  );
 
-  await new Watcher(config, logger, broadcastBox as never, ts as never).reconcile();
+  await run(broadcastBox, ts);
 
-  expect(deleted).toEqual(["🔴 stream.example.com/old"]);
+  expect(removed).toEqual(["42"]);
+  expect(deleted).toEqual([streamGroup("alice")]);
   expect(clientFetches()).toBe(0);
 });
 
-test("live stream with no matching TeamSpeak user creates nothing", async () => {
+test("live stream with no matching TeamSpeak user changes nothing", async () => {
   const broadcastBox = { fetchLiveStreamKeys: async () => new Set(["ghost"]) };
-  const { ts, created } = makeTeamspeak([], [{ nickname: "someoneelse", databaseId: "9" }]);
+  const { ts, added, created, removed, deleted } = makeTeamspeak(
+    [],
+    [],
+    [{ nickname: "someoneelse", databaseId: "9" }],
+  );
 
-  await new Watcher(config, logger, broadcastBox as never, ts as never).reconcile();
+  await run(broadcastBox, ts);
 
+  expect(added).toEqual([]);
   expect(created).toEqual([]);
+  expect(removed).toEqual([]);
+  expect(deleted).toEqual([]);
 });

@@ -5,14 +5,29 @@ import type { Logger } from "./logger.ts";
 /** A regular (non-template) server group. */
 const SERVER_GROUP_TYPE_REGULAR = 1;
 
+/** `i_group_show_name_in_tree` value that renders the group name before the nickname. */
+const SHOW_NAME_IN_TREE_BEFORE = 1;
+
+/** TeamSpeak error id returned when a query yields an empty result set. */
+const EMPTY_RESULT_ERROR_ID = "1281";
+
 export interface TeamSpeakClientInfo {
   nickname: string;
   databaseId: string;
 }
 
-export interface TemporaryGroup {
+export interface ServerGroupRef {
   sgid: string;
   name: string;
+}
+
+function isEmptyResultError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "id" in error &&
+    (error as { id: unknown }).id === EMPTY_RESULT_ERROR_ID
+  );
 }
 
 /**
@@ -20,12 +35,10 @@ export interface TemporaryGroup {
  * operations the watcher needs, plus transparent reconnection.
  */
 export class TeamSpeakManager {
-  readonly #config: Config;
   readonly #logger: Logger;
   #query: TeamSpeak;
 
-  private constructor(config: Config, logger: Logger, query: TeamSpeak) {
-    this.#config = config;
+  private constructor(logger: Logger, query: TeamSpeak) {
     this.#logger = logger;
     this.#query = query;
   }
@@ -41,7 +54,7 @@ export class TeamSpeakManager {
       nickname: config.teamspeak.nickname,
     });
 
-    const manager = new TeamSpeakManager(config, logger, query);
+    const manager = new TeamSpeakManager(logger, query);
     manager.#attachHandlers();
     logger.info(
       `Connected to TeamSpeak ServerQuery at ${config.teamspeak.host}:${config.teamspeak.queryPort}`,
@@ -67,6 +80,27 @@ export class TeamSpeakManager {
     });
   }
 
+  /**
+   * Finds or creates the shared "live" group and makes sure its name is shown
+   * before the nickname in the client tree. Returns its server group id.
+   */
+  async ensureLiveGroup(name: string): Promise<string> {
+    const groups = await this.#query.serverGroupList();
+    let group = groups.find((candidate) => candidate.name === name);
+
+    if (group === undefined) {
+      group = await this.#query.serverGroupCreate(name, SERVER_GROUP_TYPE_REGULAR);
+      this.#logger.info(`Created shared live group "${name}" (sgid=${group.sgid})`);
+    }
+
+    await this.#query.serverGroupAddPerm(group.sgid, {
+      permname: "i_group_show_name_in_tree",
+      permvalue: SHOW_NAME_IN_TREE_BEFORE,
+    });
+
+    return group.sgid;
+  }
+
   /** Lists regular (non-query) connected clients. */
   async listClients(): Promise<TeamSpeakClientInfo[]> {
     const clients = await this.#query.clientList({ clientType: 0 });
@@ -77,24 +111,49 @@ export class TeamSpeakManager {
     }));
   }
 
-  /** Lists server groups whose name starts with the configured prefix. */
-  async listTemporaryGroups(): Promise<TemporaryGroup[]> {
+  /** Database ids of the clients currently in the given server group. */
+  async listGroupMemberDbids(sgid: string): Promise<Set<string>> {
+    try {
+      const members = await this.#query.serverGroupClientList(sgid);
+
+      return new Set(members.map((member) => member.cldbid));
+    } catch (error) {
+      if (isEmptyResultError(error)) {
+        return new Set();
+      }
+
+      throw error;
+    }
+  }
+
+  /** Server groups whose name starts with `prefix`, excluding `excludeSgid`. */
+  async listGroupsByPrefix(prefix: string, excludeSgid: string): Promise<ServerGroupRef[]> {
     const groups = await this.#query.serverGroupList();
 
     return groups
-      .filter((group) => group.name.startsWith(this.#config.groupPrefix))
+      .filter((group) => group.sgid !== excludeSgid && group.name.startsWith(prefix))
       .map((group) => ({ sgid: group.sgid, name: group.name }));
   }
 
+  async addClientToGroup(databaseId: string, sgid: string): Promise<void> {
+    await this.#query.serverGroupAddClient(databaseId, sgid);
+  }
+
+  async removeClientFromGroup(databaseId: string, sgid: string): Promise<void> {
+    await this.#query.serverGroupDelClient(databaseId, sgid);
+  }
+
   /** Creates a regular server group and assigns the given client to it. */
-  async createGroupAndAssign(name: string, databaseId: string): Promise<void> {
+  async createGroupAndAssign(name: string, databaseId: string): Promise<string> {
     const group = await this.#query.serverGroupCreate(name, SERVER_GROUP_TYPE_REGULAR);
     await this.#query.serverGroupAddClient(databaseId, group.sgid);
     this.#logger.info(`Created group "${name}" and assigned client dbid=${databaseId}`);
+
+    return group.sgid;
   }
 
   /** Deletes a server group (force-removing any members). */
-  async deleteGroup(group: TemporaryGroup): Promise<void> {
+  async deleteGroup(group: ServerGroupRef): Promise<void> {
     await this.#query.serverGroupDel(group.sgid, true);
     this.#logger.info(`Deleted group "${group.name}"`);
   }
