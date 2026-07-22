@@ -1,5 +1,4 @@
 import { QueryProtocol, TeamSpeak } from "ts3-nodejs-library";
-import { config } from "./config.ts";
 import { logger } from "./logger.ts";
 
 /** A regular (non-template) server group. */
@@ -41,22 +40,27 @@ export class TeamSpeakManager {
     this.#query = query;
   }
 
-  static async connect(): Promise<TeamSpeakManager> {
+  static async connect(options: {
+    host: string;
+    queryPort: number;
+    serverPort: number;
+    username: string;
+    password: string;
+    nickname: string;
+  }): Promise<TeamSpeakManager> {
     const query = await TeamSpeak.connect({
-      host: config.teamspeak.host,
+      host: options.host,
       protocol: QueryProtocol.RAW,
-      queryport: config.teamspeak.queryPort,
-      serverport: config.teamspeak.serverPort,
-      username: config.teamspeak.username,
-      password: config.teamspeak.password,
-      nickname: config.teamspeak.nickname,
+      queryport: options.queryPort,
+      serverport: options.serverPort,
+      username: options.username,
+      password: options.password,
+      nickname: options.nickname,
     });
 
     const manager = new TeamSpeakManager(query);
     manager.#attachHandlers();
-    logger.info(
-      `Connected to TeamSpeak ServerQuery at ${config.teamspeak.host}:${config.teamspeak.queryPort}`,
-    );
+    logger.info(`Connected to TeamSpeak ServerQuery at ${options.host}:${options.queryPort}`);
 
     return manager;
   }
@@ -80,8 +84,7 @@ export class TeamSpeakManager {
    * Finds or creates the shared "live" group and makes sure its name is shown
    * before the nickname in the client tree. Returns its server group id.
    */
-  async ensureLiveGroup(): Promise<string> {
-    const name = config.liveGroupName;
+  async ensureLiveGroup(name: string): Promise<string> {
     const groups = await this.#query.serverGroupList();
     let group = groups.find((candidate) => candidate.name === name);
 

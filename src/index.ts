@@ -27,9 +27,9 @@ async function main(): Promise<void> {
   );
 
   const broadcastBox = new BroadcastBoxClient(config.broadcastBox);
-  const teamspeak = await TeamSpeakManager.connect();
-  const liveGroupSgid = await teamspeak.ensureLiveGroup();
-  const watcher = new Watcher(broadcastBox, teamspeak, liveGroupSgid);
+  const teamspeak = await TeamSpeakManager.connect(config.teamspeak);
+  const liveGroupSgid = await teamspeak.ensureLiveGroup(config.liveGroupName);
+  const watcher = new Watcher(broadcastBox, teamspeak, liveGroupSgid, config);
 
   const abort = new AbortController();
   let shuttingDown = false;
