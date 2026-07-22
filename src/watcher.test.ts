@@ -11,7 +11,7 @@ const LIVE_SGID = "100";
 function makeTeamspeak(
   members: string[],
   streamGroups: ServerGroupRef[],
-  clients: { nickname: string; databaseId: string }[],
+  clients: { nickname: string; databaseId: string; channelId?: string }[],
 ) {
   const memberSet = new Set(members);
   let groups = [...streamGroups];
@@ -19,6 +19,7 @@ function makeTeamspeak(
   const removed: string[] = [];
   const created: string[] = [];
   const deleted: string[] = [];
+  const messages: { channelId: string; text: string }[] = [];
   let clientFetches = 0;
 
   const ts = {
@@ -27,7 +28,10 @@ function makeTeamspeak(
       groups.filter((group) => group.sgid !== excludeSgid && group.name.startsWith(prefix)),
     listClients: async () => {
       clientFetches++;
-      return clients;
+      return clients.map((client) => ({ channelId: "1", ...client }));
+    },
+    sendChannelMessage: async (channelId: string, text: string) => {
+      messages.push({ channelId, text });
     },
     addClientToGroup: async (databaseId: string) => {
       added.push(databaseId);
@@ -49,7 +53,7 @@ function makeTeamspeak(
     disconnect: async () => undefined,
   };
 
-  return { ts, added, removed, created, deleted, clientFetches: () => clientFetches };
+  return { ts, added, removed, created, deleted, messages, clientFetches: () => clientFetches };
 }
 
 function streamGroup(streamKey: string): string {
@@ -68,14 +72,15 @@ test("config exposes decoupled group names and a normalized public host", () => 
   expect(config.streamGroupPrefix).toBe("📺");
   expect(config.publicStreamHost).toBe("stream.example.com");
   expect(config.broadcastBox.authorization).toBe(`Bearer ${btoa("secret")}`);
+  expect(config.liveMessageTemplate).toBe("{nickname} is now live: {link}");
 });
 
 test("go-live: adds to the shared group and creates the stream-link group", async () => {
   const broadcastBox = { fetchLiveStreamKeys: async () => new Set(["alice"]) };
-  const { ts, added, created, removed, deleted } = makeTeamspeak(
+  const { ts, added, created, removed, deleted, messages } = makeTeamspeak(
     [],
     [],
-    [{ nickname: "Alice", databaseId: "42" }],
+    [{ nickname: "Alice", databaseId: "42", channelId: "5" }],
   );
 
   await run(broadcastBox, ts);
@@ -84,11 +89,15 @@ test("go-live: adds to the shared group and creates the stream-link group", asyn
   expect(created).toEqual([streamGroup("alice")]);
   expect(removed).toEqual([]);
   expect(deleted).toEqual([]);
+  // Announces in the channel the user is in, preserving the original nickname casing.
+  expect(messages).toEqual([
+    { channelId: "5", text: "Alice is now live: https://stream.example.com/alice" },
+  ]);
 });
 
 test("still-live: leaves membership and stream group untouched", async () => {
   const broadcastBox = { fetchLiveStreamKeys: async () => new Set(["alice"]) };
-  const { ts, added, created, removed, deleted } = makeTeamspeak(
+  const { ts, added, created, removed, deleted, messages } = makeTeamspeak(
     ["42"],
     [{ sgid: "1", name: streamGroup("alice") }],
     [{ nickname: "alice", databaseId: "42" }],
@@ -100,6 +109,8 @@ test("still-live: leaves membership and stream group untouched", async () => {
   expect(created).toEqual([]);
   expect(removed).toEqual([]);
   expect(deleted).toEqual([]);
+  // Already a live-group member — no re-announcement.
+  expect(messages).toEqual([]);
 });
 
 test("stop: removes the member and deletes their stream group", async () => {

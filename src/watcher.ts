@@ -2,6 +2,14 @@ import type { BroadcastBoxClient } from "./broadcast-box.ts";
 import { logger } from "./logger.ts";
 import type { ServerGroupRef, TeamSpeakManager } from "./teamspeak.ts";
 
+/** A live user resolved to a connected TeamSpeak client. */
+interface LiveUser {
+  databaseId: string;
+  channelId: string;
+  nickname: string;
+  streamKey: string;
+}
+
 /**
  * Reconciles TeamSpeak groups against the users currently live on Broadcast Box.
  *
@@ -19,18 +27,20 @@ export class Watcher {
   readonly #liveGroupSgid: string;
   readonly #streamGroupPrefix: string;
   readonly #publicStreamHost: string;
+  readonly #liveMessageTemplate: string;
 
   constructor(
     broadcastBox: BroadcastBoxClient,
     teamspeak: TeamSpeakManager,
     liveGroupSgid: string,
-    options: { streamGroupPrefix: string; publicStreamHost: string },
+    options: { streamGroupPrefix: string; publicStreamHost: string; liveMessageTemplate: string },
   ) {
     this.#broadcastBox = broadcastBox;
     this.#teamspeak = teamspeak;
     this.#liveGroupSgid = liveGroupSgid;
     this.#streamGroupPrefix = options.streamGroupPrefix;
     this.#publicStreamHost = options.publicStreamHost;
+    this.#liveMessageTemplate = options.liveMessageTemplate;
   }
 
   /** Per-user stream-link group name, e.g. `📺 stream.example.com/alice`. */
@@ -62,24 +72,32 @@ export class Watcher {
     }
 
     const clients = await this.#teamspeak.listClients();
-    const databaseIdByNickname = new Map<string, string>();
+    const clientByNickname = new Map<string, (typeof clients)[number]>();
     for (const client of clients) {
-      databaseIdByNickname.set(client.nickname.toLowerCase(), client.databaseId);
+      clientByNickname.set(client.nickname.toLowerCase(), client);
     }
 
     // Desired state for the live users that map to a connected client.
-    const desiredMembers = new Set<string>();
+    const desiredMembers = new Map<string, LiveUser>();
     const desiredStreamGroups = new Map<string, { streamKey: string; databaseId: string }>();
     for (const streamKey of liveStreamKeys) {
-      const databaseId = databaseIdByNickname.get(streamKey.toLowerCase());
+      const client = clientByNickname.get(streamKey.toLowerCase());
 
-      if (databaseId === undefined) {
+      if (client === undefined) {
         logger.debug(`Live stream "${streamKey}" has no matching connected TeamSpeak user`);
         continue;
       }
 
-      desiredMembers.add(databaseId);
-      desiredStreamGroups.set(this.#streamGroupName(streamKey), { streamKey, databaseId });
+      desiredMembers.set(client.databaseId, {
+        databaseId: client.databaseId,
+        channelId: client.channelId,
+        nickname: client.nickname,
+        streamKey,
+      });
+      desiredStreamGroups.set(this.#streamGroupName(streamKey), {
+        streamKey,
+        databaseId: client.databaseId,
+      });
     }
 
     await this.#reconcileSharedMembership(currentMembers, desiredMembers);
@@ -98,8 +116,13 @@ export class Watcher {
     await this.#deleteGroups(groups);
   }
 
-  async #reconcileSharedMembership(current: Set<string>, desired: Set<string>): Promise<void> {
-    for (const databaseId of desired) {
+  async #reconcileSharedMembership(
+    current: Set<string>,
+    desired: Map<string, LiveUser>,
+  ): Promise<void> {
+    // Newly-live users are handled one after another so the query client's
+    // channel hop and the channel message stay in step per user.
+    for (const [databaseId, user] of desired) {
       if (current.has(databaseId)) {
         continue;
       }
@@ -109,7 +132,10 @@ export class Watcher {
         logger.info(`Added dbid=${databaseId} to the live group`);
       } catch (error) {
         logger.error(`Failed to add dbid=${databaseId} to the live group:`, message(error));
+        continue;
       }
+
+      await this.#announceLive(user);
     }
 
     for (const databaseId of current) {
@@ -123,6 +149,29 @@ export class Watcher {
       } catch (error) {
         logger.error(`Failed to remove dbid=${databaseId} from the live group:`, message(error));
       }
+    }
+  }
+
+  /** Public watch URL for a stream, e.g. `https://stream.example.com/alice`. */
+  #streamLink(streamKey: string): string {
+    return `https://${this.#publicStreamHost}/${streamKey}`;
+  }
+
+  /** Best-effort go-live announcement in the channel the user is currently in. */
+  async #announceLive(user: LiveUser): Promise<void> {
+    if (this.#liveMessageTemplate === "") {
+      return;
+    }
+
+    const text = this.#liveMessageTemplate
+      .replaceAll("{nickname}", user.nickname)
+      .replaceAll("{link}", this.#streamLink(user.streamKey));
+
+    try {
+      await this.#teamspeak.sendChannelMessage(user.channelId, text);
+      logger.info(`Announced "${user.nickname}" live in channel ${user.channelId}`);
+    } catch (error) {
+      logger.error(`Failed to announce "${user.nickname}" as live:`, message(error));
     }
   }
 

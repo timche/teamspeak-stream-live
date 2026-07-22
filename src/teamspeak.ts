@@ -1,4 +1,4 @@
-import { QueryProtocol, TeamSpeak } from "ts3-nodejs-library";
+import { QueryProtocol, TeamSpeak, TextMessageTargetMode } from "ts3-nodejs-library";
 import { logger } from "./logger.ts";
 
 /** A regular (non-template) server group. */
@@ -13,6 +13,8 @@ const EMPTY_RESULT_ERROR_ID = "1281";
 export interface TeamSpeakClientInfo {
   nickname: string;
   databaseId: string;
+  /** Id of the channel the client is currently in. */
+  channelId: string;
 }
 
 export interface ServerGroupRef {
@@ -108,7 +110,23 @@ export class TeamSpeakManager {
     return clients.map((client) => ({
       nickname: client.nickname,
       databaseId: client.databaseId,
+      channelId: client.cid,
     }));
+  }
+
+  /**
+   * Sends a text message to a channel. TeamSpeak channel messages always go to
+   * the query client's *current* channel, so the client is moved into the
+   * target channel first (unless it is already there).
+   */
+  async sendChannelMessage(channelId: string, text: string): Promise<void> {
+    const whoami = await this.#query.whoami();
+
+    if (whoami.clientChannelId !== channelId) {
+      await this.#query.clientMove(whoami.clientId, channelId);
+    }
+
+    await this.#query.sendTextMessage(channelId, TextMessageTargetMode.CHANNEL, text);
   }
 
   /** Database ids of the clients currently in the given server group. */

@@ -56,6 +56,9 @@ export const configSchema = z
     POLL_INTERVAL_MS: integerEnv("POLL_INTERVAL_MS", 10_000),
     LIVE_GROUP_NAME: optionalEnv("🔴"),
     STREAM_GROUP_PREFIX: optionalEnv("📺"),
+    // Not `optionalEnv`: an explicit blank value must survive as "" (disabled)
+    // rather than falling back to the default template.
+    LIVE_MESSAGE_TEMPLATE: z.string().default("{nickname} is now live: {link}"),
   })
   .transform((env) => ({
     broadcastBox: {
@@ -79,6 +82,12 @@ export const configSchema = z
     liveGroupName: env.LIVE_GROUP_NAME,
     /** Prefix for the per-user stream-link groups, e.g. `📺 stream.example.com/alice`. */
     streamGroupPrefix: env.STREAM_GROUP_PREFIX,
+    /**
+     * Template for the go-live channel message. Supports `{nickname}` (the
+     * TeamSpeak nickname) and `{link}` (the public stream URL). Set it blank to
+     * disable the announcement.
+     */
+    liveMessageTemplate: env.LIVE_MESSAGE_TEMPLATE,
   }));
 
 export type Config = z.infer<typeof configSchema>;
