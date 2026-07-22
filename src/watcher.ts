@@ -2,6 +2,9 @@ import type { BroadcastBoxClient } from "./broadcast-box.ts";
 import { logger } from "./logger.ts";
 import type { ServerGroupRef, TeamSpeakManager } from "./teamspeak.ts";
 
+/** Prefix identifying this watcher's log lines when several features run. */
+const SERVICE = "Broadcast Box";
+
 /** A live user resolved to a connected TeamSpeak client. */
 interface LiveUser {
   databaseId: string;
@@ -84,7 +87,7 @@ export class Watcher {
       const client = clientByNickname.get(streamKey.toLowerCase());
 
       if (client === undefined) {
-        logger.debug(`Live stream "${streamKey}" has no matching connected TeamSpeak user`);
+        logger.debug(`${SERVICE} stream "${streamKey}" has no matching connected TeamSpeak user`);
         continue;
       }
 
@@ -129,9 +132,12 @@ export class Watcher {
 
       try {
         await this.#teamspeak.addClientToGroup(databaseId, this.#liveGroupSgid);
-        logger.info(`Added dbid=${databaseId} to the live group`);
+        logger.info(`${SERVICE} added dbid=${databaseId} to the live group`);
       } catch (error) {
-        logger.error(`Failed to add dbid=${databaseId} to the live group:`, message(error));
+        logger.error(
+          `${SERVICE} failed to add dbid=${databaseId} to the live group:`,
+          message(error),
+        );
         continue;
       }
 
@@ -145,9 +151,12 @@ export class Watcher {
 
       try {
         await this.#teamspeak.removeClientFromGroup(databaseId, this.#liveGroupSgid);
-        logger.info(`Removed dbid=${databaseId} from the live group`);
+        logger.info(`${SERVICE} removed dbid=${databaseId} from the live group`);
       } catch (error) {
-        logger.error(`Failed to remove dbid=${databaseId} from the live group:`, message(error));
+        logger.error(
+          `${SERVICE} failed to remove dbid=${databaseId} from the live group:`,
+          message(error),
+        );
       }
     }
   }
@@ -169,9 +178,9 @@ export class Watcher {
 
     try {
       await this.#teamspeak.sendChannelMessage(user.channelId, text);
-      logger.info(`Announced "${user.nickname}" live in channel ${user.channelId}`);
+      logger.info(`${SERVICE} announced "${user.nickname}" live in channel ${user.channelId}`);
     } catch (error) {
-      logger.error(`Failed to announce "${user.nickname}" as live:`, message(error));
+      logger.error(`${SERVICE} failed to announce "${user.nickname}" as live:`, message(error));
     }
   }
 
@@ -198,7 +207,10 @@ export class Watcher {
       try {
         await this.#teamspeak.createGroupAndAssign(name, databaseId);
       } catch (error) {
-        logger.error(`Failed to create/assign stream group for "${streamKey}":`, message(error));
+        logger.error(
+          `${SERVICE} failed to create/assign stream group for "${streamKey}":`,
+          message(error),
+        );
       }
     }
   }
@@ -208,7 +220,10 @@ export class Watcher {
       try {
         await this.#teamspeak.removeClientFromGroup(databaseId, this.#liveGroupSgid);
       } catch (error) {
-        logger.error(`Failed to remove dbid=${databaseId} from the live group:`, message(error));
+        logger.error(
+          `${SERVICE} failed to remove dbid=${databaseId} from the live group:`,
+          message(error),
+        );
       }
     }
   }
@@ -218,7 +233,7 @@ export class Watcher {
       try {
         await this.#teamspeak.deleteGroup(group);
       } catch (error) {
-        logger.error(`Failed to delete group "${group.name}":`, message(error));
+        logger.error(`${SERVICE} failed to delete group "${group.name}":`, message(error));
       }
     }
   }

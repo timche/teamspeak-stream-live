@@ -147,7 +147,7 @@ export class TwitchClient {
       .post(this.#tokenUrl, { body, retry: { limit: 2 }, timeout: 10_000 })
       .json(tokenSchema);
     this.#token = access_token;
-    logger.debug("Obtained a Twitch app access token");
+    logger.debug("Twitch obtained an app access token");
 
     return access_token;
   }

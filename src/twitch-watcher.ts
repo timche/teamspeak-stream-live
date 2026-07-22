@@ -2,6 +2,9 @@ import { logger } from "./logger.ts";
 import type { TeamSpeakClientInfo, TeamSpeakManager } from "./teamspeak.ts";
 import type { TwitchClient } from "./twitch.ts";
 
+/** Prefix identifying this watcher's log lines when several features run. */
+const SERVICE = "Twitch";
+
 /** A live twitch channel resolved to a connected TeamSpeak client. */
 interface LiveTwitchUser {
   username: string;
@@ -84,7 +87,7 @@ export class TwitchWatcher {
 
         if (client === undefined) {
           logger.debug(
-            `Twitch channel "${group.username}" is live but member dbid=${databaseId} is not connected`,
+            `${SERVICE} channel "${group.username}" is live but member dbid=${databaseId} is not connected`,
           );
           continue;
         }
@@ -115,9 +118,12 @@ export class TwitchWatcher {
 
       try {
         await this.#teamspeak.addClientToGroup(databaseId, this.#liveGroupSgid);
-        logger.info(`Added dbid=${databaseId} to the Twitch live group`);
+        logger.info(`${SERVICE} added dbid=${databaseId} to the live group`);
       } catch (error) {
-        logger.error(`Failed to add dbid=${databaseId} to the Twitch live group:`, message(error));
+        logger.error(
+          `${SERVICE} failed to add dbid=${databaseId} to the live group:`,
+          message(error),
+        );
         continue;
       }
 
@@ -131,10 +137,10 @@ export class TwitchWatcher {
 
       try {
         await this.#teamspeak.removeClientFromGroup(databaseId, this.#liveGroupSgid);
-        logger.info(`Removed dbid=${databaseId} from the Twitch live group`);
+        logger.info(`${SERVICE} removed dbid=${databaseId} from the live group`);
       } catch (error) {
         logger.error(
-          `Failed to remove dbid=${databaseId} from the Twitch live group:`,
+          `${SERVICE} failed to remove dbid=${databaseId} from the live group:`,
           message(error),
         );
       }
@@ -163,11 +169,11 @@ export class TwitchWatcher {
     try {
       await this.#teamspeak.sendChannelMessage(user.client.channelId, text);
       logger.info(
-        `Announced "${user.client.nickname}" live on Twitch in channel ${user.client.channelId}`,
+        `${SERVICE} announced "${user.client.nickname}" live in channel ${user.client.channelId}`,
       );
     } catch (error) {
       logger.error(
-        `Failed to announce "${user.client.nickname}" as live on Twitch:`,
+        `${SERVICE} failed to announce "${user.client.nickname}" as live:`,
         message(error),
       );
     }
@@ -179,7 +185,7 @@ export class TwitchWatcher {
         await this.#teamspeak.removeClientFromGroup(databaseId, this.#liveGroupSgid);
       } catch (error) {
         logger.error(
-          `Failed to remove dbid=${databaseId} from the Twitch live group:`,
+          `${SERVICE} failed to remove dbid=${databaseId} from the live group:`,
           message(error),
         );
       }
