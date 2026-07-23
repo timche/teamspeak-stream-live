@@ -32,6 +32,7 @@ type fakeServer struct {
 	mu        sync.Mutex
 	responses map[string]string
 	conns     map[net.Conn]struct{}
+	commands  []string
 	closed    bool
 }
 
@@ -70,6 +71,19 @@ func (s *fakeServer) set(cmd, resp string) {
 	s.responses[cmd] = resp
 }
 
+// lastCommand returns the most recent raw command line whose first token matches
+// cmd, or "" if none was received yet.
+func (s *fakeServer) lastCommand(cmd string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.commands) - 1; i >= 0; i-- {
+		if strings.SplitN(s.commands[i], " ", 2)[0] == cmd {
+			return s.commands[i]
+		}
+	}
+	return ""
+}
+
 func (s *fakeServer) serve() {
 	for {
 		conn, err := s.ln.Accept()
@@ -100,11 +114,13 @@ func (s *fakeServer) handle(conn net.Conn) {
 	sc := bufio.NewScanner(conn)
 	sc.Split(bufio.ScanLines)
 	for sc.Scan() {
-		cmd := strings.TrimSpace(strings.SplitN(sc.Text(), " ", 2)[0])
+		line := strings.TrimSpace(sc.Text())
+		cmd := strings.SplitN(line, " ", 2)[0]
 		if cmd == "" {
 			continue
 		}
 		s.mu.Lock()
+		s.commands = append(s.commands, line)
 		resp, ok := s.responses[cmd]
 		s.mu.Unlock()
 
@@ -183,6 +199,29 @@ func TestEnsureLiveGroupCreatesWhenMissing(t *testing.T) {
 	}
 	if sgid != "99" {
 		t.Errorf("sgid = %q, want 99 (created)", sgid)
+	}
+}
+
+// TestEnsureLiveGroupSendsCompletePermCommand guards against regressing the
+// servergroupaddperm wire format: TeamSpeak requires permnegated and permskip,
+// and omitting them makes the server reject the command with error 1539
+// ("parameter not found"), crashing startup.
+func TestEnsureLiveGroupSendsCompletePermCommand(t *testing.T) {
+	s := newFakeServer(t)
+	m := connect(t, s)
+
+	if _, err := m.EnsureLiveGroup(context.Background(), "live"); err != nil {
+		t.Fatalf("EnsureLiveGroup: %v", err)
+	}
+
+	line := s.lastCommand("servergroupaddperm")
+	if line == "" {
+		t.Fatal("no servergroupaddperm command was sent")
+	}
+	for _, param := range []string{"sgid=", "permsid=", "permvalue=", "permnegated=", "permskip="} {
+		if !strings.Contains(line, param) {
+			t.Errorf("servergroupaddperm missing %q parameter: %q", param, line)
+		}
 	}
 }
 

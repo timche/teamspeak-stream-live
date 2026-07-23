@@ -22,6 +22,10 @@ const (
 	serverGroupTypeRegular = 1
 	// showNameInTreeBefore renders the group name before the nickname.
 	showNameInTreeBefore = 1
+	// permNotNegated / permNoSkip are the required permnegated/permskip flags
+	// for servergroupaddperm; both off for a plain granted permission.
+	permNotNegated = 0
+	permNoSkip     = 0
 	// textMessageTargetModeChannel targets the query client's current channel.
 	textMessageTargetModeChannel = 2
 	// emptyResultErrorID is returned when a query yields an empty result set.
@@ -394,6 +398,8 @@ func addServerGroupPerm(c *ts3.Client, sgid, permsid string, value int) error {
 		ts3.NewArg("sgid", sgid),
 		ts3.NewArg("permsid", permsid),
 		ts3.NewArg("permvalue", value),
+		ts3.NewArg("permnegated", permNotNegated),
+		ts3.NewArg("permskip", permNoSkip),
 	))
 	return err
 }
