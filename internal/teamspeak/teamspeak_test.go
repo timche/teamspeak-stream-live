@@ -291,6 +291,24 @@ func TestListGroupMemberDbidsEmptyResult(t *testing.T) {
 	}
 }
 
+func TestListGroupMemberDbidsEmptyResponse(t *testing.T) {
+	s := newFakeServer(t)
+	// Some TeamSpeak servers report an empty group as a bare "error id=0 msg=ok"
+	// with no data line (rather than error id 1281). go-ts3 surfaces that as a
+	// "no lines" InvalidResponseError; it must still normalise to {}, not fail and
+	// trigger a spurious reconnect.
+	s.set("servergroupclientlist", "")
+	m := connect(t, s)
+
+	members, err := m.ListGroupMemberDbids(context.Background(), "100")
+	if err != nil {
+		t.Fatalf("ListGroupMemberDbids: %v", err)
+	}
+	if len(members) != 0 {
+		t.Errorf("members = %v, want empty", members)
+	}
+}
+
 func TestReconnectAfterDisconnect(t *testing.T) {
 	s := newFakeServer(t)
 	m := connect(t, s)

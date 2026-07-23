@@ -30,6 +30,10 @@ const (
 	textMessageTargetModeChannel = 2
 	// emptyResultErrorID is returned when a query yields an empty result set.
 	emptyResultErrorID = 1281
+	// emptyResponseReason is go-ts3's InvalidResponseError reason when a command
+	// issued WithResponse comes back as a bare "error id=0 msg=ok" with no data
+	// line — how some TeamSpeak servers report an empty result instead of id 1281.
+	emptyResponseReason = "no lines"
 	// commandTimeout bounds a single ServerQuery command.
 	commandTimeout = 10 * time.Second
 	// defaultReconnectInterval matches the original library's reconnect(-1, 2000).
@@ -161,9 +165,18 @@ func isProtocolError(err error) bool {
 	return errors.As(err, &tsErr)
 }
 
+// isEmptyResult reports whether err means "the result set was empty" rather than
+// a real failure. TeamSpeak servers signal this two ways: some return the
+// protocol error id 1281 ("empty result set"); others return a plain
+// "error id=0 msg=ok" with no data line, which go-ts3 surfaces as an
+// InvalidResponseError with reason "no lines" when a response struct was expected.
 func isEmptyResult(err error) bool {
 	var tsErr *ts3.Error
-	return errors.As(err, &tsErr) && tsErr.ID == emptyResultErrorID
+	if errors.As(err, &tsErr) {
+		return tsErr.ID == emptyResultErrorID
+	}
+	var invErr *ts3.InvalidResponseError
+	return errors.As(err, &invErr) && invErr.Reason == emptyResponseReason
 }
 
 // EnsureLiveGroup finds or creates the shared "live" group and makes sure its
